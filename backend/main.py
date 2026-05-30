@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional
 import uvicorn
 import os
@@ -22,10 +22,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-UPLOAD_DIR = Path("../uploads")
-OUTPUT_DIR = Path("../outputs")
-UPLOAD_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
+UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "./uploads"))
+OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "./outputs"))
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 jobs = {}
 
@@ -34,8 +34,43 @@ class YouTubeRequest(BaseModel):
     url: str
     format: str = "both"
     max_shorts: int = 5
-    mode: str = "best_shorts"       # "best_shorts" | "equal_clips"
-    clip_duration: int = 60         # seconds per clip (equal_clips mode)
+    mode: str = "best_shorts"
+    clip_duration: int = 60
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v):
+        if not v or not v.strip():
+            raise ValueError("URL cannot be empty")
+        return v
+
+    @field_validator("format")
+    @classmethod
+    def validate_format(cls, v):
+        if v not in ["vertical", "horizontal", "both"]:
+            raise ValueError("format must be 'vertical', 'horizontal', or 'both'")
+        return v
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, v):
+        if v not in ["best_shorts", "equal_clips"]:
+            raise ValueError("mode must be 'best_shorts' or 'equal_clips'")
+        return v
+
+    @field_validator("max_shorts")
+    @classmethod
+    def validate_max_shorts(cls, v):
+        if v < 1 or v > 15:
+            raise ValueError("max_shorts must be between 1 and 15")
+        return v
+
+    @field_validator("clip_duration")
+    @classmethod
+    def validate_clip_duration(cls, v):
+        if v < 15 or v > 300:
+            raise ValueError("clip_duration must be between 15 and 300 seconds")
+        return v
 
 
 class UploadRequest(BaseModel):
@@ -99,6 +134,41 @@ class FileURLRequest(BaseModel):
     max_shorts: int = 5
     mode: str = "best_shorts"
     clip_duration: int = 60
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v):
+        if not v or not v.strip():
+            raise ValueError("URL cannot be empty")
+        return v
+
+    @field_validator("format")
+    @classmethod
+    def validate_format(cls, v):
+        if v not in ["vertical", "horizontal", "both"]:
+            raise ValueError("format must be 'vertical', 'horizontal', or 'both'")
+        return v
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, v):
+        if v not in ["best_shorts", "equal_clips"]:
+            raise ValueError("mode must be 'best_shorts' or 'equal_clips'")
+        return v
+
+    @field_validator("max_shorts")
+    @classmethod
+    def validate_max_shorts(cls, v):
+        if v < 1 or v > 15:
+            raise ValueError("max_shorts must be between 1 and 15")
+        return v
+
+    @field_validator("clip_duration")
+    @classmethod
+    def validate_clip_duration(cls, v):
+        if v < 15 or v > 300:
+            raise ValueError("clip_duration must be between 15 and 300 seconds")
+        return v
 
 
 @app.post("/api/process/url")

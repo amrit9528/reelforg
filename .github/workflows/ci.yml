@@ -2,63 +2,22 @@ name: CI - Test and Build
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main]
 
 jobs:
-  test-frontend:
-    name: Test Frontend
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Build frontend
-        working-directory: frontend
-        run: npm run build
-
-      - name: Check for build errors
-        working-directory: frontend
-        run: |
-          if [ ! -d "build" ]; then
-            echo "Build directory not created"
-            exit 1
-          fi
-
-  deploy:
-    name: Run with Docker Compose
-    runs-on: ubuntu-latest
-    needs: [test-frontend]
+  build:
+    name: Build and Test
+    runs-on: self-hosted
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Create .env file
         run: |
-          cat > .env << EOF
-          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
-          GOOGLE_OAUTH_CLIENT_ID=${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
-          GOOGLE_OAUTH_CLIENT_SECRET=${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
-          ALLOWED_ORIGINS=http://localhost:3000
-          REACT_APP_API_URL=http://localhost:8000
-          REACT_APP_ENV=production
-          EOF
+          echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" > .env
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Run docker-compose
-        run: docker-compose up -d api frontend
+      - name: Build and run with Docker Compose
+        run: docker compose up --build -d
 
       - name: Check services are running
-        run: docker-compose ps
+        run: docker compose ps
