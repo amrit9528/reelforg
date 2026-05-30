@@ -9,6 +9,7 @@ services:
       - "8000:8000"
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ALLOWED_ORIGINS=http://52.66.155.222:3000,http://localhost:3000
     volumes:
       - ./outputs:/app/outputs
       - ./uploads:/app/uploads
