@@ -98,6 +98,12 @@ class SEORequest(BaseModel):
     topic: Optional[str] = ""
 
 
+class ExportSelectedRequest(BaseModel):
+    job_id: str
+    selected_indices: list
+    format: str = "both"
+
+
 @app.post("/api/process/youtube")
 async def process_youtube(req: YouTubeRequest, background_tasks: BackgroundTasks):
     job_id = str(uuid.uuid4())
@@ -237,6 +243,27 @@ async def yt_upload(req: YTUploadRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/export-selected")
+async def export_selected(req: ExportSelectedRequest, background_tasks: BackgroundTasks):
+    """Export only selected clips with specified format."""
+    job = jobs.get(req.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if "detected_segments" not in job:
+        raise HTTPException(status_code=400, detail="No detected segments found. Run detection first.")
+
+    # Update job to export status
+    job["status"] = "exporting"
+    job["progress"] = 0
+    job["message"] = "Exporting selected clips..."
+
+    background_tasks.add_task(
+        export_selected_clips, req.job_id, req.selected_indices, req.format
+    )
+    return {"job_id": req.job_id}
+
+
 async def run_pipeline(job_id, video_path, yt_url, format, max_shorts, mode, clip_duration):
     processor = VideoProcessor(
         job_id=job_id,
@@ -249,7 +276,32 @@ async def run_pipeline(job_id, video_path, yt_url, format, max_shorts, mode, cli
         clip_duration=clip_duration,
         jobs=jobs,
     )
-    await processor.run()
+    await processor.run(detection_only=True)
+
+
+async def export_selected_clips(job_id, selected_indices, format):
+    job = jobs[job_id]
+    segments = job.get("detected_segments", [])
+
+    if not segments:
+        job["status"] = "error"
+        job["message"] = "No segments found"
+        return
+
+    selected_segments = [segments[i] for i in selected_indices if i < len(segments)]
+
+    processor = VideoProcessor(
+        job_id=job_id,
+        video_path=job.get("video_path"),
+        yt_url=None,
+        output_dir=str(OUTPUT_DIR),
+        format=format,
+        max_shorts=len(selected_segments),
+        mode="custom",
+        clip_duration=0,
+        jobs=jobs,
+    )
+    await processor.export_clips(selected_segments)
 
 
 if __name__ == "__main__":

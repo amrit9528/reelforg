@@ -29,7 +29,7 @@ class VideoProcessor:
         if shorts is not None:
             self.jobs[self.job_id]["shorts"] = shorts
 
-    async def run(self):
+    async def run(self, detection_only=False):
         try:
             if self.yt_url:
                 self.update("processing", 5, "Downloading video from YouTube...")
@@ -41,8 +41,11 @@ class VideoProcessor:
             self.update("processing", 15, "Analyzing video metadata...")
             info = await asyncio.to_thread(self._get_video_info)
             duration = float(info.get("duration", 0))
+            self.jobs[self.job_id]["video_path"] = self.video_path
 
-            if self.mode == "equal_clips":
+            if detection_only:
+                await self._run_detection_only(duration)
+            elif self.mode == "equal_clips":
                 await self._run_equal_clips(duration)
             else:
                 await self._run_best_shorts(duration)
@@ -50,6 +53,25 @@ class VideoProcessor:
         except Exception as e:
             self.update("error", 0, f"Error: {str(e)}")
             raise
+
+    async def _run_detection_only(self, duration):
+        self.update("processing", 25, "Detecting scenes and engaging moments...")
+        segments = await asyncio.to_thread(self._detect_scenes, duration)
+
+        self.update("processing", 45, "Scoring segments for engagement...")
+        best_segments = await asyncio.to_thread(self._rank_segments, segments, duration)
+
+        self.jobs[self.job_id]["detected_segments"] = best_segments
+        self.jobs[self.job_id]["shorts"] = [
+            {
+                "index": i,
+                "start": seg["start"],
+                "duration": seg["duration"],
+                "score": seg.get("score", 0),
+            }
+            for i, seg in enumerate(best_segments)
+        ]
+        self.update("detected", 50, f"Detected {len(best_segments)} clips. Select which ones to export.", self.jobs[self.job_id]["shorts"])
 
     async def _run_equal_clips(self, duration):
         clip_sec = self.clip_duration
@@ -281,3 +303,19 @@ class VideoProcessor:
                     "yt_url": None,
                 })
         return results
+
+    async def export_clips(self, segments):
+        try:
+            shorts = []
+            total = len(segments)
+            for i, seg in enumerate(segments):
+                pct = int((i / total) * 95) + 5
+                self.update("processing", pct, f"Exporting clip {i+1}/{total}...")
+                results = await asyncio.to_thread(self._export_short, seg, i)
+                shorts.extend(results)
+                self.jobs[self.job_id]["shorts"] = shorts
+
+            self.update("done", 100, "All clips exported!", shorts=shorts)
+        except Exception as e:
+            self.update("error", 0, f"Export error: {str(e)}")
+            raise

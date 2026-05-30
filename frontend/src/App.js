@@ -44,15 +44,22 @@ export default function App() {
   const [uploadStatus, setUploadStatus] = useState({});
   const [topic, setTopic] = useState("");
   const [privacy, setPrivacy] = useState("private");
+  const [selectedClipIndices, setSelectedClipIndices] = useState(new Set());
   const fileRef = useRef();
   const pollRef = useRef();
 
-  const startPolling = (id) => {
+  const startPolling = (id, detectionOnly = false) => {
     pollRef.current = setInterval(async () => {
       try {
         const res = await axios.get(`${API}/api/status/${id}`);
         setJob(res.data);
-        if (res.data.status === "done" || res.data.status === "error") {
+        if (res.data.status === "detected" && detectionOnly) {
+          clearInterval(pollRef.current);
+          setStep("selection");
+          if (res.data.shorts) {
+            setSelectedClipIndices(new Set(res.data.shorts.map((_, i) => i)));
+          }
+        } else if (res.data.status === "done" || res.data.status === "error") {
           clearInterval(pollRef.current);
           if (res.data.status === "done") {
             setStep("results");
@@ -134,7 +141,7 @@ export default function App() {
 
       setJobId(res.data.job_id);
       setJob({ status: "queued", progress: 0, message: "Starting...", shorts: [] });
-      startPolling(res.data.job_id);
+      startPolling(res.data.job_id, true);
     } catch (e) {
       setStep("config");
       const errorMsg = e.response?.data?.detail || e.message;
@@ -148,6 +155,34 @@ export default function App() {
       } else {
         alert("Error: " + errorMsg);
       }
+    }
+  };
+
+  const handleExportSelected = async () => {
+    const backendMode = selectedMode === "youtube_upload" ? "best_shorts" : selectedMode;
+    const selectedIndices = Array.from(selectedClipIndices).sort((a, b) => a - b);
+
+    if (selectedIndices.length === 0) {
+      alert("Please select at least one clip to export");
+      return;
+    }
+
+    setStep("processing");
+    setJob({ status: "exporting", progress: 0, message: "Exporting selected clips...", shorts: job.shorts });
+
+    try {
+      const res = await axios.post(`${API}/api/export-selected`, {
+        job_id: jobId,
+        selected_indices: selectedIndices,
+        format: format,
+      });
+
+      setJob({ status: "queued", progress: 0, message: "Exporting...", shorts: job.shorts });
+      startPolling(jobId, false);
+    } catch (e) {
+      setStep("selection");
+      const errorMsg = e.response?.data?.detail || e.message;
+      alert("Export failed: " + errorMsg);
     }
   };
 
@@ -408,6 +443,61 @@ export default function App() {
         </div>
       )}
 
+      {step === "selection" && job && (
+        <div className="selection-view">
+          <div className="selection-header">
+            <h2>📋 Select Clips to Export</h2>
+            <p className="selection-sub">Choose which clips you want to export. {selectedClipIndices.size} of {job.shorts.length} selected</p>
+          </div>
+
+          <div className="selection-toolbar">
+            <button
+              className="btn-select-all"
+              onClick={() => setSelectedClipIndices(new Set(job.shorts.map((_, i) => i)))}
+            >
+              ✓ Select All
+            </button>
+            <button
+              className="btn-select-none"
+              onClick={() => setSelectedClipIndices(new Set())}
+            >
+              ✗ Clear All
+            </button>
+          </div>
+
+          <div className="clips-grid">
+            {job.shorts.map((s, i) => (
+              <div key={i} className="clip-selector">
+                <input
+                  type="checkbox"
+                  id={`clip-${i}`}
+                  checked={selectedClipIndices.has(i)}
+                  onChange={(e) => {
+                    const newSelected = new Set(selectedClipIndices);
+                    if (e.target.checked) {
+                      newSelected.add(i);
+                    } else {
+                      newSelected.delete(i);
+                    }
+                    setSelectedClipIndices(newSelected);
+                  }}
+                />
+                <label htmlFor={`clip-${i}`}>
+                  <ClipPreview short={s} index={i} jobId={jobId} />
+                </label>
+              </div>
+            ))}
+          </div>
+
+          <div className="selection-actions">
+            <button className="btn-back" onClick={() => { clearInterval(pollRef.current); reset(); }}>← Back</button>
+            <button className="btn-export-selected" onClick={handleExportSelected} disabled={selectedClipIndices.size === 0}>
+              ⚡ Export {selectedClipIndices.size} Clip{selectedClipIndices.size !== 1 ? "s" : ""}
+            </button>
+          </div>
+        </div>
+      )}
+
       {step === "results" && job && (
         <div className="results-view">
           <div className="results-header">
@@ -447,6 +537,27 @@ export default function App() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ClipPreview({ short, index, jobId }) {
+  return (
+    <div className="clip-preview-container">
+      <div className="clip-preview-mini">
+        {short.url ? (
+          <video src={`${API}${short.url}`} className="clip-video-mini" />
+        ) : (
+          <div className="clip-video-placeholder">🎬</div>
+        )}
+        <div className="clip-preview-overlay">
+          <div className="clip-number">#{index + 1}</div>
+        </div>
+      </div>
+      <div className="clip-preview-info-mini">
+        <div className="clip-start">Start: {short.start}s</div>
+        <div className="clip-duration">Duration: {short.duration}s</div>
+      </div>
     </div>
   );
 }
