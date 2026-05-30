@@ -1,0 +1,183 @@
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional
+import uvicorn
+import os
+import uuid
+import shutil
+from pathlib import Path
+from processor import VideoProcessor
+from seo import generate_seo
+from youtube_uploader import upload_to_youtube
+
+app = FastAPI(title="ReelForge API")
+
+# Allow requests from your EC2 domain/IP
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+UPLOAD_DIR = Path("../uploads")
+OUTPUT_DIR = Path("../outputs")
+UPLOAD_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+jobs = {}
+
+
+class YouTubeRequest(BaseModel):
+    url: str
+    format: str = "both"
+    max_shorts: int = 5
+    mode: str = "best_shorts"       # "best_shorts" | "equal_clips"
+    clip_duration: int = 60         # seconds per clip (equal_clips mode)
+
+
+class UploadRequest(BaseModel):
+    format: str = "both"
+    max_shorts: int = 5
+    mode: str = "best_shorts"
+    clip_duration: int = 60
+
+
+class YTUploadRequest(BaseModel):
+    job_id: str
+    filename: str
+    title: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[list] = None
+    privacy: str = "private"        # "private" | "unlisted" | "public"
+
+
+class SEORequest(BaseModel):
+    job_id: str
+    filename: str
+    topic: Optional[str] = ""
+
+
+@app.post("/api/process/youtube")
+async def process_youtube(req: YouTubeRequest, background_tasks: BackgroundTasks):
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {"status": "queued", "progress": 0, "message": "Queued...", "shorts": []}
+    background_tasks.add_task(
+        run_pipeline, job_id, None, req.url,
+        req.format, req.max_shorts, req.mode, req.clip_duration
+    )
+    return {"job_id": job_id}
+
+
+@app.post("/api/process/upload")
+async def process_upload(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    format: str = "both",
+    max_shorts: int = 5,
+    mode: str = "best_shorts",
+    clip_duration: int = 60,
+):
+    job_id = str(uuid.uuid4())
+    ext = Path(file.filename).suffix
+    save_path = UPLOAD_DIR / f"{job_id}{ext}"
+    with open(save_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    jobs[job_id] = {"status": "queued", "progress": 0, "message": "Uploaded. Starting...", "shorts": []}
+    background_tasks.add_task(
+        run_pipeline, job_id, str(save_path), None,
+        format, max_shorts, mode, clip_duration
+    )
+    return {"job_id": job_id}
+
+
+class FileURLRequest(BaseModel):
+    url: str
+    format: str = "both"
+    max_shorts: int = 5
+    mode: str = "best_shorts"
+    clip_duration: int = 60
+
+
+@app.post("/api/process/url")
+async def process_file_url(req: FileURLRequest, background_tasks: BackgroundTasks):
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {"status": "queued", "progress": 0, "message": "Downloading video...", "shorts": []}
+    background_tasks.add_task(
+        run_pipeline, job_id, req.url, None,
+        req.format, req.max_shorts, req.mode, req.clip_duration
+    )
+    return {"job_id": job_id}
+
+
+@app.get("/api/status/health")
+async def health_check():
+    return {"status": "ok", "service": "ReelForge API"}
+
+
+@app.get("/api/status/{job_id}")
+async def get_status(job_id: str):
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    j = jobs[job_id]
+    return {"job_id": job_id, **j}
+
+
+@app.post("/api/seo")
+async def get_seo(req: SEORequest):
+    """Generate AI SEO (title, description, tags) for a clip."""
+    try:
+        seo = await generate_seo(req.filename, req.topic)
+        return seo
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/youtube/upload")
+async def yt_upload(req: YTUploadRequest):
+    """Upload a clip to YouTube."""
+    job = jobs.get(req.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    clip_path = OUTPUT_DIR / req.job_id / req.filename
+    if not clip_path.exists():
+        raise HTTPException(status_code=404, detail="Clip file not found")
+
+    try:
+        result = await upload_to_youtube(
+            file_path=str(clip_path),
+            title=req.title or req.filename,
+            description=req.description or "",
+            tags=req.tags or [],
+            privacy=req.privacy,
+        )
+        # Update job shorts with YT url
+        for s in job["shorts"]:
+            if s["filename"] == req.filename:
+                s["uploaded_to_yt"] = True
+                s["yt_url"] = result.get("url")
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def run_pipeline(job_id, video_path, yt_url, format, max_shorts, mode, clip_duration):
+    processor = VideoProcessor(
+        job_id=job_id,
+        video_path=video_path,
+        yt_url=yt_url,
+        output_dir=str(OUTPUT_DIR),
+        format=format,
+        max_shorts=max_shorts,
+        mode=mode,
+        clip_duration=clip_duration,
+        jobs=jobs,
+    )
+    await processor.run()
+
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
