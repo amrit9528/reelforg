@@ -55,3 +55,14 @@ htmlcov/
 # Frontend
 frontend/build/
 frontend/.env.local
+
+# Docker
+docker-compose.override.local.yml
+.dockerignore
+
+# Certificates
+certs/
+
+# Local development
+.env.local
+.env.production.local

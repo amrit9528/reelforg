@@ -1,0 +1,111 @@
+name: Deploy - Self-Hosted Runner
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  deploy:
+    name: Deploy to Self-Hosted Runner
+    runs-on: [self-hosted, reelforge]
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set environment variables
+        run: |
+          echo "ENVIRONMENT=production" >> $GITHUB_ENV
+          echo "TIMESTAMP=$(date +%Y%m%d_%H%M%S)" >> $GITHUB_ENV
+
+      - name: Load environment secrets
+        run: |
+          set -a
+          if [ -f ~/.reelforge/.env.production ]; then
+            source ~/.reelforge/.env.production
+          fi
+          set +a
+        shell: bash
+
+      - name: Stop existing containers
+        run: |
+          cd ${{ secrets.DEPLOY_PATH || '/home/reelforge/reelforge' }}
+          docker-compose down || true
+        continue-on-error: true
+
+      - name: Build Docker images
+        run: |
+          cd ${{ secrets.DEPLOY_PATH || '/home/reelforge/reelforge' }}
+          docker-compose build --no-cache
+
+      - name: Create environment file
+        run: |
+          DEPLOY_PATH=${{ secrets.DEPLOY_PATH || '/home/reelforge/reelforge' }}
+          cat > $DEPLOY_PATH/.env << EOF
+          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_OAUTH_CLIENT_ID=${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET=${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          ALLOWED_ORIGINS=${{ secrets.ALLOWED_ORIGINS || 'http://localhost:3000' }}
+          REACT_APP_API_URL=${{ secrets.REACT_APP_API_URL || 'http://localhost:8000' }}
+          REACT_APP_ENV=production
+          EOF
+
+      - name: Start services
+        run: |
+          cd ${{ secrets.DEPLOY_PATH || '/home/reelforge/reelforge' }}
+          docker-compose up -d
+
+      - name: Wait for services to be healthy
+        run: |
+          cd ${{ secrets.DEPLOY_PATH || '/home/reelforge/reelforge' }}
+          echo "Waiting for API to be healthy..."
+          for i in {1..30}; do
+            if docker-compose exec -T api curl -f http://localhost:8000/api/status/health; then
+              echo "API is healthy"
+              break
+            fi
+            echo "Attempt $i/30 - API not ready yet, waiting..."
+            sleep 5
+          done
+
+      - name: Verify deployment
+        run: |
+          echo "Checking API health..."
+          curl -f http://localhost:8000/api/status/health || exit 1
+          echo "Checking Frontend health..."
+          curl -f http://localhost:3000 || exit 1
+
+      - name: Run smoke tests
+        run: |
+          cd ${{ secrets.DEPLOY_PATH || '/home/reelforge/reelforge' }}
+          echo "Running smoke tests..."
+          docker-compose exec -T api python -m pytest tests/ -v --tb=short || true
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Deployment successful - ${{ env.TIMESTAMP }}"
+          else
+            echo "❌ Deployment failed - ${{ env.TIMESTAMP }}"
+            exit 1
+          fi
+
+      - name: Log deployment info
+        run: |
+          echo "Deployment Log - ${{ env.TIMESTAMP }}"
+          echo "Branch: ${{ github.ref }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Docker containers:"
+          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"

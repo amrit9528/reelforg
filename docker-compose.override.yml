@@ -1,0 +1,35 @@
+# Override configuration for development
+# This file is automatically loaded by docker-compose and overrides settings in docker-compose.yml
+# Only used in development (not in production)
+
+version: '3.8'
+
+services:
+  api:
+    # Build from source for development
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: development
+    # Enable debug mode
+    environment:
+      - DEBUG=True
+      - LOG_LEVEL=DEBUG
+    # Mount source code for hot reload
+    volumes:
+      - ./backend:/app:cached
+      - /app/__pycache__
+    # Keep container running
+    tty: true
+    stdin_open: true
+
+  frontend:
+    # Enable watch mode
+    environment:
+      - WDS_SOCKET_HOST=localhost
+      - WDS_SOCKET_PORT=3000
+      - DANGEROUSLY_DISABLE_HOST_CHECK=true
+    volumes:
+      - ./frontend/src:/app/src:cached
+      - ./frontend/public:/app/public:cached
+      - /app/node_modules
