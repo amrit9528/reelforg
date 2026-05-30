@@ -9,7 +9,7 @@ services:
       - "8000:8000"
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - ALLOWED_ORIGINS=http://52.66.155.222:3000,http://localhost:3000
+      - ALLOWED_ORIGINS=http://43.205.31.160:3000,http://localhost:3000
     volumes:
       - ./outputs:/app/outputs
       - ./uploads:/app/uploads
@@ -20,7 +20,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - REACT_APP_API_URL=http://52.66.155.222:8000
+        - REACT_APP_API_URL=http://43.205.31.160:8000
     ports:
       - "3000:3000"
     depends_on:
